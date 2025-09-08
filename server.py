@@ -32,6 +32,26 @@ bidder_location = BidderLocation()
 multi_file_bidder_location = MultiFileBidderLocation()
 embedder = multi_file_bidder_location.embedder
 
+class ComputeTopkSimilarityInput(BaseModel):
+    """文本向量相似度TopK输入参数"""
+
+    query_texts: List[str] = Field(default=[], title="查询文本列表")
+    candidate_texts: List[str] = Field(default=[], title="候选文本列表")
+    top_k: int = Field(default=1, title="返回TopK个最相似")
+
+    class Config:
+        extra = Extra.allow
+
+
+class ComputeTopkSimilarityOutput(BaseModel):
+    """文本向量相似度TopK输出参数（参考BidderLocationOutput）"""
+
+    result: Dict = Field(default={}, title="相似度结果")
+
+    errCode: int = Field(default=0, title="状态码")
+    errMsg: str = Field(default="success", title="返回信息")
+    success: bool = Field(default=True, title="返回状态")
+
 
 @router.get("/status")
 async def get_status():
