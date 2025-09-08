@@ -5,13 +5,9 @@
 # @File     : text_similarity_utils.py
 # @Software : Pycharm
 
-import torch
-import torch.nn.functional as F
+import numpy as np
 
 from libs.utils.open_embed import OpenEmbeddings
-
-# 默认设备配置
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 from fuzzywuzzy import fuzz, process
 
@@ -103,8 +99,13 @@ def find_most_similar_in_list_item_vector(
 
 
 def compute_topk_similarity(
-    embedder, query_texts: List[str], candidate_texts: List[str], top_k: int = 1,
-    batch_size: int = 32, normalize: bool = True, use_device: Optional[str] = None
+    embedder,
+    query_texts: List[str],
+    candidate_texts: List[str],
+    top_k: int = 1,
+    batch_size: int = 32,
+    normalize: bool = True,
+    use_device: Optional[str] = None,
 ) -> Tuple[List[List[float]], List[List[int]]]:
     """
     优化的向量相似度计算函数，支持批处理、归一化和设备选择
@@ -126,9 +127,6 @@ def compute_topk_similarity(
     if not query_texts or not candidate_texts:
         return [], []
 
-    # 设备选择
-    compute_device = device if use_device is None else torch.device(use_device)
-
     # 批量嵌入处理（避免一次性处理过多文本导致内存溢出）
     def batch_embed(texts: List[str], batch_size: int):
         all_embeddings = []
@@ -146,37 +144,42 @@ def compute_topk_similarity(
         query_vecs = embedder.embed_documents(query_texts)
         candidate_vecs = embedder.embed_documents(candidate_texts)
 
-    # 转换为张量并移至设备
-    query_tensor = torch.tensor(query_vecs, dtype=torch.float32, device=compute_device)
-    candidate_tensor = torch.tensor(candidate_vecs, dtype=torch.float32, device=compute_device)
+    # 转换为numpy数组
+    query_arr = np.asarray(query_vecs, dtype=np.float32)
+    candidate_arr = np.asarray(candidate_vecs, dtype=np.float32)
 
     # L2归一化（使余弦相似度计算更高效）
     if normalize:
-        query_tensor = F.normalize(query_tensor, p=2, dim=-1)
-        candidate_tensor = F.normalize(candidate_tensor, p=2, dim=-1)
-        # 归一化后，余弦相似度等价于点积
-        sim_matrix = torch.mm(query_tensor, candidate_tensor.t())
+        def l2_normalize(x: np.ndarray) -> np.ndarray:
+            norms = np.linalg.norm(x, ord=2, axis=-1, keepdims=True)
+            norms = np.where(norms == 0.0, 1.0, norms)
+            return x / norms
+
+        query_arr = l2_normalize(query_arr)
+        candidate_arr = l2_normalize(candidate_arr)
+        # 点积等价于余弦相似度
+        sim_matrix = query_arr @ candidate_arr.T
     else:
-        # 原始余弦相似度计算
-        sim_matrix = F.cosine_similarity(
-            query_tensor.unsqueeze(1), candidate_tensor.unsqueeze(0), dim=-1
-        )
+        # 原始余弦相似度
+        query_norms = np.linalg.norm(query_arr, ord=2, axis=-1, keepdims=True)
+        candidate_norms = np.linalg.norm(candidate_arr, ord=2, axis=-1, keepdims=True)
+        query_safe = np.where(query_norms == 0.0, 1.0, query_norms)
+        candidate_safe = np.where(candidate_norms == 0.0, 1.0, candidate_norms)
+        sim_matrix = (query_arr @ candidate_arr.T) / (query_safe @ candidate_safe.T)
 
     # 计算top-k
-    k = min(top_k, candidate_tensor.size(0))
+    num_candidates = candidate_arr.shape[0]
+    k = min(top_k, num_candidates)
 
-    # 使用torch.topk的优化：当k较小时，sorted=False可以提升性能
-    top_k_scores, top_k_indices = torch.topk(
-        sim_matrix, k=k, dim=1, largest=True, sorted=True
-    )
+    # 使用argpartition获取top-k索引，然后排序
+    top_indices = np.argpartition(-sim_matrix, kth=k-1, axis=1)[:, :k]
+    # 对每一行按相似度降序排序
+    row_indices = np.arange(sim_matrix.shape[0])[:, None]
+    sorted_idx = np.argsort(-sim_matrix[row_indices, top_indices], axis=1)
+    topk_sorted_indices = top_indices[row_indices, sorted_idx]
+    topk_sorted_scores = sim_matrix[row_indices, topk_sorted_indices]
 
-    # 批量转换为Python原生类型（更高效）
-    if compute_device.type == 'cuda':
-        # GPU到CPU的数据传输优化
-        top_k_scores = top_k_scores.cpu()
-        top_k_indices = top_k_indices.cpu()
-
-    scores_list = top_k_scores.tolist()
-    indices_list = top_k_indices.tolist()
+    scores_list = topk_sorted_scores.tolist()
+    indices_list = topk_sorted_indices.tolist()
 
     return scores_list, indices_list
