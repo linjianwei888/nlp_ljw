@@ -1,0 +1,9 @@
+embeddings:
+  bge:
+    name: "bge-large-zh-v1.5"
+    server_url: "http://192.168.111.20:8015/v1/embeddings"  
+    context_length: 512
+  qwen3-4b-embed:
+    name: "qwen3-4b-embed"
+    server_url: "http://192.168.111.10:8024/v1/embeddings" 
+    context_length: 1024 # 32768
